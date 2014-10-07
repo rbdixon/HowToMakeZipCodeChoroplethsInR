@@ -1,0 +1,150 @@
+# How to Make Zip Choropleths in R
+
+Brad Dixon -- rbdixon@gmail.com
+
+## Setup
+
+```{r Setup}
+require(ggplot2)      # for plotting
+require(sp)           # for working with spatial polygons
+require(spdep)        # for computing the distance to the nearest neighbour zip codes
+require(plyr)         # for mangling data Hadley-fu style
+require(rgdal)        # for reading shape files
+require(maptools)     # for thinning spatial polygons
+require(RColorBrewer) # for colors
+require(ggmap)        # for using a map with ggplot
+require(plotmapbox)   # for grabbing maps from MapBox
+# Special merge function for SpatialPolygonDataFrames
+source('lib/spdfMerge.R')
+# Function to draw the choropleth
+source('lib/choroplethsp.R')
+# Helpers that size the plot and grab the map
+source('lib/zchoropleth.R')
+# Helper functions for fortifying SPDFs with Data
+source('lib/fortifyMerge.R')
+# Helper to calculate zoom levels
+source('lib/calc_zoom.R')
+
+# Read in the Mapbox map key secret
+source('secrets.R')
+
+# Set the seed so we get the same random data each run.
+set.seed(1)
+```
+
+## Zip Code Shapes
+
+```{r Zip Data}
+# From http://www2.census.gov/geo/tiger/TIGER2014/ZCTA5/tl_2014_us_zcta510.zip
+# Download this file and unzip it into a directory named "zips"
+ZIPS.spdf = readOGR("./zips", "tl_2014_us_zcta510")
+
+# Column alias
+ZIPS.spdf@data$zip = ZIPS.spdf@data$ZCTA5CE10
+```
+
+This is a file that has polygon shapes for each Zip Code Tabulation Area. Keep in mind that not all ZIPs have a corresponding ZCTA.
+
+ZIPS.spdf is a SpatialPolygonsDataFrame (SPDF). An SPDF has polygons and data associated with each polygon.
+
+```{r SPDF}
+print(summary(ZIPS.spdf@data))
+```
+
+## Fake Data
+
+```{r Fake Data}
+# Atlanta zip codes. Watch out for numeric formatted zip codes! You'll want to pad these out and make them characters
+zips = c("30032", "30303", "30305", "30306", "30307", "30308", "30309", "30310", "30311", "30312", "30313", "30314", "30315", "30316", "30317", "30318", "30319", "30324", "30326", "30327", "30331", "30332", "30334", "30336", "30342", "30344", "30354", "30363")
+
+# I'm adding in one Dallas zip code to be evil and show why we have to be
+# selective when setting map bounds
+zips = c(zips, "75201")
+DATA = data.frame(
+  zip = zips,
+  uu = sample(1:100, size=length(zips), replace=TRUE)
+)
+```
+
+## Simple Choropleth
+
+This is the most basic usage:
+
+```{r Simple Choropleth}
+# Get just the zip code shapes that we want to illustrate.
+SIMPLE_ZIPS.spdf = ZIPS.spdf[ZIPS.spdf@data$ZCTA5CE10 %in% zips,]
+
+# Cut the data
+DATA$value = cut_number(DATA$uu, 5)
+
+# Merge
+SIMPLE_ZIPS.spdf = spdfMerge(SIMPLE_ZIPS.spdf, DATA, by="zip")
+
+# Now fortify to get a data frame that ggplot can work with.
+SIMPLE_ZIPS.df = fortifyMerge(SIMPLE_ZIPS.spdf)
+simple = choroplethsp(SIMPLE_ZIPS.df, "value")
+print(simple)
+```
+
+The obvious problem is that our lone Dallas zip code ruins the plot. This is very typical in our 
+data since visitors to a location appear to have significant geographic diversity in home locations.
+
+```{r Simple Choropleth v2}
+ATL_ZIPS.df = SIMPLE_ZIPS.df[SIMPLE_ZIPS.df$zip!="75201",]
+simple.v2 = choroplethsp(ATL_ZIPS.df, "value")
+print(simple.v2)
+```
+
+Better... but clearly this isn't an automatic operation that we could apply to many choropleths.
+
+## Adding a Map
+
+```{r Map}
+base = getmapbox_map(c(mean(ATL_ZIPS.df$long), mean(ATL_ZIPS.df$lat)), mapbox=mapbox.key, zoom=10)
+map = map_png(base)
+print(map)
+```
+
+This grabs a map from our dedicated non-Google map hosted at MapBox.
+
+```{r Choropleth with Map}
+simple.v3 = choroplethsp(ATL_ZIPS.df, "value", map)
+print(simple.v3)
+```
+
+The catch here is that setting the zoom level is a manual process. Zoom in too far (by setting zoom to 11) and you'll clip the zip code shapes. This causes them to draw very oddly and is not what you want.
+
+## Using the zchoropleth helper
+
+So far `choroplethsp()` has only used the polygons from the SPDF. `zchoropleth()` assumes more about the SPDF... specifically that it contains ZCTA shaps and data. This data is used to more automatically render the plot. `zchoropleth()` aims to get a decent looking illustration produced but this may involve removing some Zip codes from the plot.
+
+```{r Using zchoropleth}
+# Lets go back to our original data
+DATA = DATA[, c("zip", "uu")]
+
+# zchoropleth will put a dot on the map at a location we specify
+long = mean(ATL_ZIPS.df$long)
+lat = mean(ATL_ZIPS.df$lat)
+
+zplot=zchoropleth(DATA, ZIPS.spdf, "uu", long, lat)
+print(zplot)
+```
+
+Nice! Note that Dallas has automatically been excluded from the plot. This logic isn't always perfect but it works most of the time in real data sets. Only zip codes that have a closest neighbour that is less than the 3rd quartile of all zip code nearest neighbour distances are retained.
+
+## Finishing off
+
+Since the value returned by `zchoropleth()` is just a ggplot object you can finish of your plot in style.
+
+```{r Finishing}
+zplot + 
+  labs(title="Atlanta ZIP Code Choropleth", x="Longitude", y="Latitude")
+```
+
+## Gotchas
+
+```{r Gotchas}
+zips[ !(zips %in% ZIPS.spdf@data$ZCTA5CE10) ]
+```
+
+In this example we are fortunate that all of the Zip codes in the data set are present in the ZCTA shapefiles. This isn't always the case. If any are missing they will be siliently dropped by `zchoropleth()`.
