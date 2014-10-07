@@ -1,6 +1,5 @@
 .Rproj.user
+./map.png
 *.Rproj
-map.png
 zips
 secrets.R
-README_files
