@@ -1,5 +1,5 @@
 ---
-title: " How to Make Zip Choropleths in R"
+title: "How to Make Zip Choropleths in R"
 author: Brad Dixon
 date: October 7th, 2014
 output:
